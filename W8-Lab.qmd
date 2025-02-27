@@ -62,7 +62,11 @@ clean_data <- read_csv(here("data", "stokes15_ivdata.csv")) %>%
 
 clean_data %>%
     select(proposed_turbine_3km, log_home_val_07, p_uni_degree, log_median_inc, log_pop_denc) %>%
-
+    tbl_summary(
+        by = proposed_turbine_3km,
+        statistic = list(all_continuous() ~ "{mean} ({sd})")) %>%
+    modify_header(label ~ "**Variable**") %>%
+    modify_spanning_header(c("stat_1", "stat_2") ~ "**Treatment**")
 
 ```
 
@@ -103,7 +107,15 @@ Mahalanobis distance matching was first used to pair each treated unit with a co
 ```{r}
 set.seed(02252025)
 
-match_model <- 
+match_model <- matchit(
+     proposed_turbine_3km ~ # TREATMENT
+     log_home_val_07 + p_uni_degree + log_median_inc + log_pop_denc, # Pre-treatment covariates
+  data = clean_data, 
+  method = "nearest",       # Nearest neighbor matching
+  distance = "mahalanobis", # Mahalanobis distance
+  ratio = 1,                # Match one control unit to each treatment (1-to-1 matching)
+  replace = FALSE           # Control obs. are not replaced
+)
 
 # Extract matched data
 matched_data <- match.data(match_model)
@@ -133,7 +145,9 @@ new_names <- data.frame(
     new = c("Home Value (log)", "Percent University Degree", "Median Income (log)", "Population Density (log)"))
 
 # Love plot
-
+love.plot(match_model, stats = "mean.diffs", 
+          thresholds = c(m = 0.1), 
+          var.names = new_names)
 
 ```
 
@@ -144,8 +158,15 @@ new_names <- data.frame(
 ------------------------------------------------------------------------
 
 ```{r}
-propensity_scores <- 
-    
+propensity_scores <- matchit(
+  proposed_turbine_3km ~ 
+      log_home_val_07 + p_uni_degree + log_median_inc + log_pop_denc,
+  data = clean_data, 
+  method = "nearest", # Nearest neighbor matching
+  distance = "logit", # Propensity scores estimated with logistic regression
+  ratio = 1,          # Match one control unit to each treatment (1-to-1 matching)
+  replace = FALSE     # Control obs. are not replaced
+)
 ```
 
 ------------------------------------------------------------------------
@@ -156,7 +177,8 @@ propensity_scores <-
 
 ```{r}
 
-
+bal.tab(propensity_scores, 
+        var.names = new_names)
 ```
 
 ------------------------------------------------------------------------
@@ -211,18 +233,18 @@ $$ProposedTurbine_i = \beta_0 + \beta_1 WindPower_i + ControlVariables... + \eps
 ------------------------------------------------------------------------
 
 ```{r}
-# CONTROLS:
-# mindistlake + mindistlake_sq + longitude + long_sq + latitude + lat_sq + long_lat + district_id 
 
-first_stage <-
-    
-    
-```
+first_stage <- lm(proposed_turbine_3km ~  # TREATMENT
+                      log_wind_power +    # INSTRUMENT
+                      mindistlake + mindistlake_sq + # CONTROLS
+                      longitude + latitude + long_sq + lat_sq + long_lat + # GEOGRAPHIC CONTROLS
+                      district_id, # FIXED EFFECT
+                  data=matched_data)
 
-
-```{r}
 export_summs(first_stage, digits = 3,  model.names = c("First stage: Prpoposed Turbine 3km"),
              coefs = c("(Intercept)", "log_wind_power") ) 
+
+
 ```
 
 #### Check 1st stage for `relevance` - to make sure your instrument is not weak 🤕
@@ -232,7 +254,7 @@ General rule of thumb: `F-statistic > 10` is considered a relevant instrument (S
 ```{r}
 # `summary(first_stage)` # Includes the F-statistic at the bottom of long output table
 
-
+summary(first_stage)$fstatistic
 ```
 
 ------------------------------------------------------------------------
@@ -256,15 +278,13 @@ $$LiberalVoteShare_i = \beta_0 + \beta_1 \widehat{ProposedTurbine}_i + ControlVa
 ------------------------------------------------------------------------
 
 ```{r}
-# CONTROLS:
-# mindistlake + mindistlake_sq + longitude + long_sq + latitude + lat_sq + long_lat + district_id 
+second_stage <- lm(change_liberal ~ # OUTCOME
+                       proposed_turbine_3km_HAT + # PREDICTED VALUES OF X (LATE)
+                       mindistlake + mindistlake_sq +
+                       longitude + long_sq + latitude + lat_sq + long_lat +
+                       district_id, 
+                   data = matched_data)
 
-second_stage <- 
-    
-```
-
-
-```{r}
 export_summs(second_stage, digits = 3,  model.names = c("Second stage: Change in Liberal Vote Share"),
              coefs = c("(Intercept)", "proposed_turbine_3km_HAT") ) 
 ```
@@ -333,16 +353,19 @@ Syntax for specify 2SLS using `ivreg()`:
 ------------------------------------------------------------------------
 
 ```{r}
-
-fit_2sls <-
-    
-```
-
-
-```{r}
+  
+fit_2sls <- ivreg(change_liberal ~ # OUTCOME
+                    proposed_turbine_3km + # TREATMENT 
+                    mindistlake + mindistlake_sq + # CONTROLS
+                    longitude + long_sq + latitude + lat_sq + long_lat + # CONTROLS
+                    district_id |   # FIXED EFFECT 
+                    log_wind_power + # INSTRUMENT
+                    mindistlake + mindistlake_sq + # CONTROLS REPEATED...
+                    longitude + long_sq + latitude + lat_sq + long_lat + 
+                    district_id, 
+                data = matched_data)
 
 summary(fit_2sls)
-
 ```
 
 ------------------------------------------------------------------------
